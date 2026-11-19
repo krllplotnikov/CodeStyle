@@ -48,6 +48,13 @@ LED_Init(&led, &ledDescriptor);
 
 Все функции модуля первым параметром принимают указатель на свой объект: `LED_Run(&led)`. Поэтому одна библиотека спокойно обслуживает сколько угодно экземпляров.
 
+Дескриптор есть у всех объектов: у библиотек, модулей и приложений. В нём три вида полей:
+- **зависимости** — аппаратные функции (`setState`, `getTick`) или указатели на объекты нижнего уровня (`LED_st* buzzer`);
+- **колбэки событий** — через них объект сообщает наверх, что что-то произошло;
+- **`void* context`** — указатель на того, кто подписан на события. Объект его не трогает, только хранит.
+
+В `Libraries/`, `Modules/` и `Applications/` **нет глобальных переменных**: всё состояние лежит внутри объекта.
+
 ---
 
 ## 2. Как называть вещи
@@ -62,7 +69,9 @@ LED_Init(&led, &ledDescriptor);
 | Значения перечисления | `UPPER_SNAKE_CASE` с префиксом | `LED_STATE_OFF` |
 | Структура | `Модуль_Имя` + суффикс `_st` | `LED_Descriptor_st` |
 | Тип указателя на функцию | `Модуль_Имя`, без суффикса | `LED_GetTick` |
+| Тип колбэка события | `Модуль_Событие` + `Callback` | `LED_IndicationIsOverCallback` |
 | Публичная функция | `Модуль_Действие` | `LED_SetIndication` |
+| Обработчик чужого события | `Модуль_On` + событие | `ModuleBuzzer_OnIndicationIsOver` |
 | Приватная (`static`) функция | `camelCase`, без префикса | `getPlayerIdByCardUID` |
 | Переменные и поля | `camelCase`, осмысленно | `indicationRepeatCounter` |
 | Параметры функций | `camelCase` с `_` в начале | `_led`, `_repeatCount` |
@@ -150,6 +159,7 @@ struct LED_Descriptor{
 	LED_SetState                 setState;
 	LED_GetTick                  getTick;
 	LED_IndicationIsOverCallback indicationIsOverCallback;
+	void*                        context;
 };
 
 struct LED{
@@ -186,12 +196,10 @@ void LED_Run(LED_st* _led);
 
 1. `#include` **только своего** заголовка — остальные зависимости уже подключены в `.h`.
 2. Данные модуля — константные таблицы, готовые наборы.
-3. Указатель на экземпляр (для модулей и приложений, которым объект нужен в колбэках): `ModuleBuzzer_st* moduleBuzzerInstance = NULL;`
-4. Прототипы `static` функций.
-5. Публичные функции — в том же порядке, что в `.h`; первыми `_Init` и `_Run`.
-6. Реализации чужих weak-колбэков, на которые подписан модуль.
-7. Блок `//-----Weak-----` с пустыми реализациями собственных событий.
-8. Тела `static` функций — в самом конце.
+3. Прототипы `static` функций.
+4. Публичные функции — в том же порядке, что в `.h`; первыми `_Init` и `_Run`.
+5. Обработчики событий нижнего уровня `[Модуль]_On[Событие]`.
+6. Тела `static` функций — в самом конце.
 
 ### Жизненный цикл объекта
 
@@ -199,35 +207,73 @@ void LED_Run(LED_st* _led);
 - **`_Run(obj)`** — вызывается постоянно из главного цикла или задачи RTOS. Она **никогда не блокирует**: никаких `HAL_Delay` и ожиданий. Время берётся из `getTick()`. `_Run` верхнего уровня вызывает `_Run` своих зависимостей.
 - Необязательные колбэки перед вызовом проверяются на `NULL`.
 
-### События через weak-функции
+### События: колбэки + context
 
-Модуль сообщает наружу о событиях через функции с атрибутом `weak`. В модуле лежит пустая реализация «по умолчанию», а приложение, которому событие интересно, просто определяет функцию с тем же именем — и линкер подставит её.
+Объект сообщает о событии, вызывая колбэк из своего дескриптора. Первым параметром колбэк всегда получает сам объект, поэтому обработчик знает, **кто** прислал событие. Через `descriptor.context` он получает **свой** объект, то есть того, кто подписался.
+
+Так событие связано с конкретной парой экземпляров. Не нужны ни глобальные указатели, ни проверки вида `if(_x == instance->x)`, и каких угодно объектов может быть сколько угодно.
+
+Пример: модуль зуммера сам подписан на событие LED и пробрасывает своё событие наверх.
 
 ```c
+// ModuleBuzzer.h (фрагмент)
+typedef void (*ModuleBuzzer_BeepIsOverCallback)(ModuleBuzzer_st* _moduleBuzzer);
+
+struct ModuleBuzzer_Descriptor{
+	LED_st*                         buzzer;
+	ModuleBuzzer_BeepIsOverCallback beepIsOverCallback;
+	void*                           context;
+};
+
+struct ModuleBuzzer{
+	ModuleBuzzer_Descriptor_st descriptor;
+};
+
+void ModuleBuzzer_Init(ModuleBuzzer_st* _moduleBuzzer, ModuleBuzzer_Descriptor_st* _descriptor);
+void ModuleBuzzer_Run(ModuleBuzzer_st* _moduleBuzzer);
+void ModuleBuzzer_SingleBeep(ModuleBuzzer_st* _moduleBuzzer);
+void ModuleBuzzer_OnIndicationIsOver(LED_st* _led, LED_Indications_et _indication, uint8_t _repeatCounter);
+```
+
+```c
+// ModuleBuzzer.c
 #include "ModuleBuzzer.h"
 
-ModuleBuzzer_st* moduleBuzzerInstance = NULL;
-
-void ModuleBuzzer_Init(ModuleBuzzer_st* _moduleBuzzer, LED_st* _buzzer){
-	moduleBuzzerInstance = _moduleBuzzer;
-	_moduleBuzzer->buzzer = _buzzer;
+void ModuleBuzzer_Init(ModuleBuzzer_st* _moduleBuzzer, ModuleBuzzer_Descriptor_st* _descriptor){
+	_moduleBuzzer->descriptor = *_descriptor;
 }
 
 void ModuleBuzzer_Run(ModuleBuzzer_st* _moduleBuzzer){
-	LED_Run(_moduleBuzzer->buzzer);
+	LED_Run(_moduleBuzzer->descriptor.buzzer);
 }
 
 void ModuleBuzzer_SingleBeep(ModuleBuzzer_st* _moduleBuzzer){
-	LED_SetIndication(_moduleBuzzer->buzzer, LED_INDICATION_SINGLE_BLINK, 1);
+	LED_SetIndication(_moduleBuzzer->descriptor.buzzer, LED_INDICATION_SINGLE_BLINK, 1);
 }
 
-//-----Weak-----
-__attribute__((weak)) void ModuleBuzzer_IndicationIsOver(ModuleBuzzer_st* _moduleBuzzer, LED_Indications_et _indication, uint8_t _repeatCounter){}
-//-----Weak-----
+void ModuleBuzzer_OnIndicationIsOver(LED_st* _led, LED_Indications_et _indication, uint8_t _repeatCounter){
+	ModuleBuzzer_st* moduleBuzzer = (ModuleBuzzer_st*)_led->descriptor.context;
+
+	if(moduleBuzzer->descriptor.beepIsOverCallback != NULL){
+		moduleBuzzer->descriptor.beepIsOverCallback(moduleBuzzer);
+	}
+}
 ```
 
-Подписчик проверяет, что событие пришло именно от его экземпляра:
-`if(_moduleBuzzer == terminalInstance->moduleBuzzer)`.
+Приложение обрабатывает событие так же:
+
+```c
+void Terminal_OnBeepIsOver(ModuleBuzzer_st* _moduleBuzzer){
+	Terminal_st* terminal = (Terminal_st*)_moduleBuzzer->descriptor.context;
+
+	terminal->state = TERMINAL_STATE_IDLE;
+}
+```
+
+Правила:
+- обработчик чужого события — **публичная** функция `[Модуль]_On[Событие]` с точной сигнатурой колбэка. Она объявляется в `.h`, чтобы её можно было указать в дескрипторе;
+- на одно событие — один подписчик. Если событие нужно нескольким, его раздаёт дальше обработчик в приложении;
+- **weak-функции для событий не используются**: ошибку в имени линкер пропускает молча, переопределить можно лишь один раз на программу, а поведение зависит от компилятора.
 
 ---
 
@@ -241,9 +287,28 @@ __attribute__((weak)) void ModuleBuzzer_IndicationIsOver(ModuleBuzzer_st* _modul
 |---|---|
 | `//-----Variables-----` | Все объекты `= {0}`, выровнены по колонкам. Сначала библиотеки, потом модули, потом приложение |
 | `//-----Function prototypes-----` | Прототипы аппаратных функций и колбэков |
-| `//-----Descriptors-----` | Дескрипторы через designated initializers: `.getTick = HAL_GetTick,` |
+| `//-----Descriptors-----` | Дескрипторы через designated initializers. Здесь же связываются все события: колбэк + `context` |
 | `//-----Function definitions-----` | Аппаратные функции через HAL. Если функция обслуживает несколько объектов — проверяет указатель: `if(_led == &buzzer)` |
-| `//-----Callbacks-----` | Пробрасывают события библиотек в модули. **Бизнес-логики здесь нет** |
+| `//-----Callbacks-----` | Только колбэки вендора (`HAL_GPIO_EXTI_Callback` и т.п.), которые передают аппаратные события в библиотеки. **Бизнес-логики здесь нет** |
+
+Так в `main.c` видна вся схема связей проекта: кто кому что передаёт.
+
+```c
+//-----Descriptors-----
+LED_Descriptor_st buzzerDescriptor = {
+	.setState                 = buzzerSetState,
+	.getTick                  = HAL_GetTick,
+	.indicationIsOverCallback = ModuleBuzzer_OnIndicationIsOver,
+	.context                  = &moduleBuzzer,
+};
+
+ModuleBuzzer_Descriptor_st moduleBuzzerDescriptor = {
+	.buzzer             = &buzzer,
+	.beepIsOverCallback = Terminal_OnBeepIsOver,
+	.context            = &terminal,
+};
+//-----Descriptors-----
+```
 
 В `main()`:
 1. после инициализации периферии вызываются `_Init` снизу вверх: библиотеки → модули → приложение;
@@ -271,7 +336,7 @@ __attribute__((weak)) void ModuleBuzzer_IndicationIsOver(ModuleBuzzer_st* _modul
 - В `switch` метки `case` на уровне `switch`, тело каждого `case` в фигурных скобках, `break;` внутри, в конце `default: break;`:
 
   ```c
-  switch(terminalInstance->state){
+  switch(terminal->state){
   case TERMINAL_STATE_START:{
   	...
   	break;
@@ -282,7 +347,7 @@ __attribute__((weak)) void ModuleBuzzer_IndicationIsOver(ModuleBuzzer_st* _modul
   ```
 
 - Однотипные строки (`#define`, объявления типов, поля структур) выравниваются по колонкам.
-- Смена состояния (`terminalInstance->state = ...;`) — последней строкой блока, отделена пустой строкой.
+- Смена состояния (`terminal->state = ...;`) — последней строкой блока, отделена пустой строкой.
 - Секции отмечаются парными комментариями `//-----Имя-----` в начале и в конце.
 
 ---
@@ -297,5 +362,6 @@ __attribute__((weak)) void ModuleBuzzer_IndicationIsOver(ModuleBuzzer_st* _modul
 - [ ] Функции без параметров объявлены с `(void)`.
 - [ ] Секции `.c` в правильном порядке, `static` функции в `camelCase` и в конце файла.
 - [ ] `_Init` задаёт все поля, `_Run` не блокирует, необязательные колбэки проверяются на `NULL`.
-- [ ] События модулей — weak-функции в блоках `//-----Weak-----`.
+- [ ] События — только колбэки в дескрипторе с `void* context`; weak-функций и глобальных указателей на экземпляр нет.
+- [ ] Обработчики чужих событий — публичные `[Модуль]_On[Событие]`, связи заданы в дескрипторах в `main.c`.
 - [ ] В `main.c` код только в `USER CODE`, разбит на секции, в колбэках нет бизнес-логики.
