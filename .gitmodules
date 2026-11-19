@@ -1,0 +1,6 @@
+[submodule "Reference/STM32/Libraries/LED"]
+	path = Reference/STM32/Libraries/LED
+	url = https://github.com/krllplotnikov-libraries/LED
+[submodule "Reference/STM32/Libraries/Button"]
+	path = Reference/STM32/Libraries/Button
+	url = https://github.com/krllplotnikov-libraries/Button.git
