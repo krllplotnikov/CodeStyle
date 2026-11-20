@@ -62,6 +62,9 @@ void Board_Init(Board_st* board){
 	board->ledDescriptor = ledDescriptor;
 	board->buttonDescriptor = buttonDescriptor;
 
+	board->ledDescriptor.context = board;
+	board->buttonDescriptor.context = board;
+
 	LED_Init(&board->ledMain, &board->ledDescriptor);
 	Button_Init(&board->buttonMain, &board->buttonDescriptor);
 }

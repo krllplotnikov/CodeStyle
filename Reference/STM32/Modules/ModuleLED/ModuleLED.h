@@ -3,19 +3,19 @@
 
 #include <stddef.h>
 #include <stdint.h>
-#include "Board.h"
+#include "LED.h"
 
 typedef struct ModuleLED ModuleLED_st;
 
 struct ModuleLED{
-	Board_st* board;
+	LED_st* led;
 };
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-void ModuleLED_Init(ModuleLED_st* moduleLed, Board_st* board);
+void ModuleLED_Init(ModuleLED_st* moduleLed);
 void ModuleLED_Run(ModuleLED_st* moduleLed);
 
 void ModuleLED_TurnOn(ModuleLED_st* moduleLed);

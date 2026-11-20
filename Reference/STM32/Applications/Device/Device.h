@@ -2,10 +2,14 @@
 #define DEVICE_H_
 
 #include "Board.h"
+#include "ModuleLED.h"
+#include "ModuleButton.h"
 
 typedef struct Device Device_st;
 
 struct Device{
+	ModuleLED_st* moduleLed;
+	ModuleButton_st* moduleButton;
 	Board_st* board;
 };
 
