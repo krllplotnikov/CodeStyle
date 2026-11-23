@@ -5,23 +5,27 @@
 #include <stdint.h>
 #include "LED.h"
 
-typedef struct ModuleLED ModuleLED_st;
+typedef struct ModuleLED_Descriptor ModuleLED_Descriptor_st;
+typedef struct ModuleLED            ModuleLED_st;
+
+struct ModuleLED_Descriptor{
+	LED_st* led;
+};
 
 struct ModuleLED{
-	LED_st* led;
+	ModuleLED_Descriptor_st descriptor;
 };
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-void ModuleLED_Init(ModuleLED_st* moduleLed);
-void ModuleLED_Run(ModuleLED_st* moduleLed);
+void    ModuleLED_Init(ModuleLED_st* _moduleLed, ModuleLED_Descriptor_st* _descriptor);
+void    ModuleLED_Run(ModuleLED_st* _moduleLed);
 
-void ModuleLED_TurnOn(ModuleLED_st* moduleLed);
-void ModuleLED_TurnOff(ModuleLED_st* moduleLed);
-
-LED_State_et ModuleLED_GetState(ModuleLED_st* moduleLed);
+void    ModuleLED_TurnOn(ModuleLED_st* _moduleLed);
+void    ModuleLED_TurnOff(ModuleLED_st* _moduleLed);
+uint8_t ModuleLED_IsOn(ModuleLED_st* _moduleLed);
 
 #ifdef __cplusplus
 }

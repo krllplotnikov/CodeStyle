@@ -1,70 +1,53 @@
-#include "main.h"
 #include "Board.h"
+#include "main.h"
 
-//-----Function prototypes-----
-ButtonState_et GetState_Button(Button_st* button);
-uint32_t GetTick_Button();
+static Board_st* boardInstance = NULL;
 
-uint32_t GetTick_Led();
-void SetState_Led(LED_st* led, LED_State_et state);
-//-----Function prototypes-----
+static uint32_t       getTick(void);
+static ButtonState_et getButtonState(Button_st* _button);
+static void           setLedState(LED_st* _led, LED_State_et _state);
 
+void Board_Init(Board_st* _board){
+	boardInstance = _board;
 
+	ButtonDescriptor_st buttonDescriptor = {
+		.getState      = getButtonState,
+		.getTick       = getTick,
+		.eventCallback = NULL,
+		.context       = NULL,
+	};
+	Button_Init(&_board->buttonMain, &buttonDescriptor);
 
-//-----Variables-----
-Button_st buttonMain = {0};
-LED_st ledMain = {0};
-//-----Variables-----
+	LED_Descriptor_st ledDescriptor = {
+		.setState                 = setLedState,
+		.getTick                  = getTick,
+		.indicationIsOverCallback = NULL,
+		.context                  = NULL,
+	};
+	LED_Init(&_board->ledMain, &ledDescriptor);
+}
 
+static uint32_t getTick(void){
+	return HAL_GetTick();
+}
 
-
-//-----Descriptors-----
-ButtonDescriptor_st buttonDescriptor = {
-		.getTick = HAL_GetTick,
-		.getState = GetState_Button,
-		.eventCallback = EventCallback_Button
-};
-
-LED_Descriptor_st ledDescriptor = {
-		.getTick = HAL_GetTick,
-		.setState = SetState_Led,
-		.indicationIsOverCallback = IndicationIsOverCallback_Led,
-};
-//-----Descriptors-----
-
-
-
-//-----Function definitions-----
-ButtonState_et GetState_Button(Button_st* button){
-	Board_st* board = (Board_st*)button->descriptor.context;
-
-	if(button == &board->buttonMain){
-		return (ButtonState_et)HAL_GPIO_ReadPin(BUTTON_MAIN_GPIO_Port, BUTTON_MAIN_Pin);
+static ButtonState_et getButtonState(Button_st* _button){
+	if(_button == &boardInstance->buttonMain){
+		if(HAL_GPIO_ReadPin(BUTTON_MAIN_GPIO_Port, BUTTON_MAIN_Pin) == GPIO_PIN_SET){
+			return BUTTON_STATE_PRESSED;
+		}
 	}
 
 	return BUTTON_STATE_RELEASED;
 }
 
-void SetState_Led(LED_st* led, LED_State_et state){
-	Board_st* board = (Board_st*)led->descriptor.context;
-
-	if(led == &board->ledMain){
-		if(state == LED_STATE_OFF) HAL_GPIO_WritePin(LED_MAIN_GPIO_Port, LED_MAIN_Pin, GPIO_PIN_RESET);
-		else                       HAL_GPIO_WritePin(LED_MAIN_GPIO_Port, LED_MAIN_Pin, GPIO_PIN_SET);
+static void setLedState(LED_st* _led, LED_State_et _state){
+	if(_led == &boardInstance->ledMain){
+		if(_state == LED_STATE_ON){
+			HAL_GPIO_WritePin(LED_MAIN_GPIO_Port, LED_MAIN_Pin, GPIO_PIN_SET);
+		}
+		else{
+			HAL_GPIO_WritePin(LED_MAIN_GPIO_Port, LED_MAIN_Pin, GPIO_PIN_RESET);
+		}
 	}
-}
-//-----Function definitions-----
-
-void Board_Init(Board_st* board){
-	board->ledMain = ledMain;
-	board->buttonMain = buttonMain;
-
-	board->ledDescriptor = ledDescriptor;
-	board->buttonDescriptor = buttonDescriptor;
-
-	board->ledDescriptor.context = board;
-	board->buttonDescriptor.context = board;
-
-	LED_Init(&board->ledMain, &board->ledDescriptor);
-	Button_Init(&board->buttonMain, &board->buttonDescriptor);
 }

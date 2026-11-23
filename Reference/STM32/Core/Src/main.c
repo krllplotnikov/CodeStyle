@@ -54,8 +54,19 @@ static void MX_GPIO_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-Board_st board = {0};
+//-----Variables-----
+Board_st  board  = {0};
 Device_st device = {0};
+//-----Variables-----
+
+
+
+//-----Descriptors-----
+Device_Descriptor_st deviceDescriptor = {
+	.button = &board.buttonMain,
+	.led    = &board.ledMain,
+};
+//-----Descriptors-----
 /* USER CODE END 0 */
 
 /**
@@ -89,7 +100,7 @@ int main(void)
   MX_GPIO_Init();
   /* USER CODE BEGIN 2 */
   Board_Init(&board);
-  Device_Init(&device, &board);
+  Device_Init(&device, &deviceDescriptor);
   /* USER CODE END 2 */
 
   /* Infinite loop */

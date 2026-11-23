@@ -3,30 +3,38 @@
 
 #include <stddef.h>
 #include <stdint.h>
-#include "Board.h"
+#include "Button.h"
 
-typedef struct ModuleButton ModuleButton_st;
+#define MODULE_BUTTON_HOLD_COUNT 4
 
-//typedef void (*ModuleButton_ClickCallback)(ModuleButton_st* moduleButton, uint8_t counter);
+typedef enum ModuleButton_Event ModuleButton_Event_et;
+
+typedef struct ModuleButton_Descriptor ModuleButton_Descriptor_st;
+typedef struct ModuleButton            ModuleButton_st;
+
+typedef void (*ModuleButton_EventCallback)(ModuleButton_st* _moduleButton, ModuleButton_Event_et _event);
+
+enum ModuleButton_Event{
+	MODULE_BUTTON_EVENT_CLICK,
+	MODULE_BUTTON_EVENT_HOLD
+};
+
+struct ModuleButton_Descriptor{
+	Button_st*                 button;
+	ModuleButton_EventCallback eventCallback;
+	void*                      context;
+};
 
 struct ModuleButton{
-	Button_st* button;
-	//ModuleButton_ClickCallback clickCallback;
-
-	Board_st* board;
-	void* context;
+	ModuleButton_Descriptor_st descriptor;
 };
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-void ModuleButton_Init(ModuleButton_st* moduleButton, Board_st* board);
-void ModuleButton_Run(ModuleButton_st* moduleButton);
-
-//-----Weak-----
-void ModuleButton_Click(ModuleButton_st* moduleButton);
-//-----Weak-----
+void ModuleButton_Init(ModuleButton_st* _moduleButton, ModuleButton_Descriptor_st* _descriptor);
+void ModuleButton_Run(ModuleButton_st* _moduleButton);
 
 #ifdef __cplusplus
 }

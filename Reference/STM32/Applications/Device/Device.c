@@ -1,59 +1,42 @@
 #include "Device.h"
 
-void Device_Init(Device_st* device, Board_st* board){
-	device->board = board;
+static void moduleButtonEvent(ModuleButton_st* _moduleButton, ModuleButton_Event_et _event);
 
-	device->moduleLed->led = &board->ledMain;
+void Device_Init(Device_st* _device, Device_Descriptor_st* _descriptor){
+	_device->descriptor = *_descriptor;
 
-	ModuleLED_Init(device->moduleLed);
-	ModuleButton_Init(device->moduleButton, board);
+	ModuleLED_Descriptor_st moduleLedDescriptor = {
+		.led = _descriptor->led,
+	};
+	ModuleLED_Init(&_device->moduleLed, &moduleLedDescriptor);
 
-
+	ModuleButton_Descriptor_st moduleButtonDescriptor = {
+		.button        = _descriptor->button,
+		.eventCallback = moduleButtonEvent,
+		.context       = _device,
+	};
+	ModuleButton_Init(&_device->moduleButton, &moduleButtonDescriptor);
 }
 
-void Device_Run(Device_st* device){
-	ModuleLED_Run(device->moduleLed);
-	ModuleButton_Run(device->moduleButton);
+void Device_Run(Device_st* _device){
+	ModuleButton_Run(&_device->moduleButton);
+	ModuleLED_Run(&_device->moduleLed);
 }
 
-//-----Callbacks-----
-void EventCallback_Button(Button_st* button, ButtonEvent_et event, uint8_t counter){
-	Board_st* board = (Board_st*)button->descriptor.context;
+static void moduleButtonEvent(ModuleButton_st* _moduleButton, ModuleButton_Event_et _event){
+	Device_st* device = (Device_st*)_moduleButton->descriptor.context;
 
-	if(button == &board->buttonMain){
-		if(event == BUTTON_EVENT_CLICK){
-			if(counter == 1){
-				//ModuleButton_Click(device->moduleButton);
-			}
-		}
+	switch(_event){
+	case MODULE_BUTTON_EVENT_CLICK:{
+		ModuleLED_TurnOn(&device->moduleLed);
+		break;
+	}
 
-		if(event == BUTTON_EVENT_HOLD){
-			if(counter == 4){
-				//ModuleButton_Hold(moduleButton);
-			}
-		}
+	case MODULE_BUTTON_EVENT_HOLD:{
+		ModuleLED_TurnOff(&device->moduleLed);
+		break;
+	}
+
+	default: break;
 	}
 }
-//-----Callbacks-----
-
-//-----Callbacks-----
-void IndicationIsOverCallback_Led(LED_st* led, LED_Indications_et indication, uint8_t repeatCounter){
-	Board_st* board = (Board_st*)led->descriptor.context;
-
-	if(led == &board->ledMain){
-
-	}
-}
-//-----Callbacks-----
-
-//void ModuleButton_Click(ModuleButton_st* moduleButton){
-//	Device_st* device = (Device_st*)moduleButton->descriptor.context;
-//
-//	ModuleLED_TurnOn(device->descriptor.moduleLed);
-//}
-//
-//void ModuleButton_Hold(ModuleButton_st* moduleButton){
-//	Device_st* device = (Device_st*)moduleButton->descriptor.context;
-//
-//	ModuleLED_TurnOff(device->descriptor.moduleLed);
-//}
