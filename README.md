@@ -8,7 +8,29 @@
 - возможность host-тестирования логики (unit-тесты на ПК с подменой аппаратных функций заглушками — stubs/mocks);
 - явное разделение бизнес-логики и драйверного кода.
 
-Эталонная реализация находится в директории `Reference/`
+Эталонная реализация находится в директории `Reference/`. Все примеры в этом документе взяты из неё.
+
+## Содержание
+
+1. [Архитектура проекта](#1-архитектура-проекта)
+   - [Эталонный проект](#эталонный-проект)
+   - [Объект и дескриптор](#объект-и-дескриптор)
+2. [Соглашения об именовании](#2-соглашения-об-именовании)
+3. [Заголовочный файл (.h)](#3-заголовочный-файл-h)
+4. [Файл реализации (.c)](#4-файл-реализации-c)
+   - [Жизненный цикл объекта](#жизненный-цикл-объекта)
+   - [Время и переполнение счётчика тиков](#время-и-переполнение-счётчика-тиков)
+   - [События: колбэки и context](#события-колбэки-и-context)
+   - [Обработка ошибок](#обработка-ошибок)
+5. [Аппаратный слой: Board и main.c](#5-аппаратный-слой-board-и-mainc)
+   - [Board](#board)
+   - [main.c](#mainc)
+6. [Прерывания и разделяемые данные](#6-прерывания-и-разделяемые-данные)
+   - [Допустимые операции в ISR](#допустимые-операции-в-isr)
+   - [Передача данных из ISR](#передача-данных-из-isr)
+   - [Требования к разделяемым полям](#требования-к-разделяемым-полям)
+   - [RTOS](#rtos)
+7. [Форматирование](#7-форматирование)
 
 ---
 
@@ -18,42 +40,76 @@
 
 ```
 Project/
-├── Board/          ← слой аппаратной абстракции поверх HAL, по паре файлов на устройство
+├── Board/          ← слой аппаратной абстракции: объекты физических устройств и аппаратные функции поверх HAL
 ├── Libraries/      ← аппаратно-независимые библиотеки, git submodules
 ├── Modules/        ← модули: фрагменты бизнес-логики, построенные на библиотеках
 ├── Applications/   ← приложение: композиция модулей в конечный продукт
-└── main.c          ← composition root: создание объектов, связывание через дескрипторы, запуск
+└── main.c          ← composition root: создание платы и приложения, связывание, запуск
 ```
 
 | Слой | Назначение | Зависимость от платформы |
 |---|---|---|
-| `Board/` | Реализует аппаратные функции (`setState`, `transmit`…) поверх HAL. Не содержит состояния и логики — только тонкие обёртки над периферией | **Есть** |
+| `Board/` | Содержит экземпляры библиотек, соответствующие физическим устройствам платы (`buttonMain`, `ledMain`), и инициализирует их. Реализует аппаратные функции (`getButtonState`, `setLedState`, `getTick`) поверх HAL. Бизнес-логики не содержит | **Есть** |
 | `Libraries/` | Решает одну изолированную задачу (управление светодиодом, опрос кнопки). Подключается как **git submodule** для переиспользования между проектами | Нет |
-| `Modules/` | Реализует фрагмент бизнес-логики (например, звуковая индикация события) на основе библиотек | Нет |
-| `Applications/` | Реализует бизнес-логику продукта, агрегирует модули | Нет |
-| `main.c` | Создаёт экземпляры объектов, заполняет дескрипторы функциями из `Board/`, запускает систему | **Есть** (только на этапе инициализации) |
+| `Modules/` | Реализует фрагмент бизнес-логики на основе библиотек (например, распознавание клика и удержания кнопки) | Нет |
+| `Applications/` | Реализует бизнес-логику продукта. Содержит модули как поля своей структуры и инициализирует их | Нет |
+| `main.c` | Создаёт экземпляры платы и приложения, передаёт приложению объекты платы через дескриптор, запускает систему | **Есть** (только на этапе инициализации) |
 
-Граф зависимостей строго однонаправленный: `Applications → Modules → Libraries`; `Board/` зависит от `Libraries/` (использует их типы), но не наоборот. Портирование на другой МК или плату сводится к перегенерации файлов конфигуратора и переписыванию `Board/`; остальные слои не изменяются.
+Граф зависимостей строго однонаправленный: `Applications → Modules → Libraries`; `Board/` зависит от `Libraries/` (содержит их объекты), но не наоборот. Портирование на другой МК или плату сводится к перегенерации файлов конфигуратора и переписыванию `Board.c`; остальные слои не изменяются.
+
+### Эталонный проект
+
+`Reference/STM32` — проект для STM32F103C8 с одной кнопкой и одним светодиодом. Клик по кнопке включает светодиод, удержание — выключает.
+
+```
+Reference/STM32/
+├── Board/
+│   ├── Board.h                 ← Board_st: buttonMain, ledMain; Board_Init
+│   └── Board.c                 ← аппаратные функции поверх HAL, инициализация объектов платы
+├── Libraries/                  ← git submodules
+│   ├── Button/src/Button.h/.c  ← опрос кнопки: антидребезг, клики, удержание
+│   └── LED/src/LED.h/.c        ← управление светодиодом: индикации, повторы
+├── Modules/
+│   ├── ModuleButton/           ← преобразование событий кнопки в CLICK / HOLD
+│   └── ModuleLED/              ← включение / выключение светодиода
+├── Applications/
+│   └── Device/                 ← связывает ModuleButton и ModuleLED
+└── Core/Src/main.c             ← создание board и device, запуск
+```
+
+Цепочка вызовов в суперцикле: `Device_Run → ModuleButton_Run → Button_Run` и `Device_Run → ModuleLED_Run → LED_Run`.
 
 ### Объект и дескриптор
 
-Каждая сущность (светодиод, кнопка, модуль) представлена **структурой-объектом**, инкапсулирующей её состояние. При инициализации объекту передаётся **дескриптор** — структура с внешними зависимостями и аппаратными функциями:
+Каждая сущность (светодиод, кнопка, модуль, приложение) представлена **структурой-объектом**, инкапсулирующей её состояние. При инициализации объекту передаётся **дескриптор** — структура с внешними зависимостями и аппаратными функциями:
 
 ```c
 LED_Descriptor_st ledDescriptor = {
-	.setState = ledSetState,   // управление выходом
-	.getTick  = HAL_GetTick,   // источник системного времени
+	.setState                 = setLedState,   // управление выходом
+	.getTick                  = getTick,       // источник системного времени
+	.indicationIsOverCallback = NULL,
+	.context                  = NULL,
 };
-
-LED_Init(&led, &ledDescriptor);
+LED_Init(&_board->ledMain, &ledDescriptor);
 ```
 
-Все функции модуля принимают указатель на экземпляр первым аргументом: `LED_Run(&led)`. За счёт этого код библиотеки реентерабелен по отношению к экземплярам и обслуживает произвольное их число.
+Все функции объекта принимают указатель на экземпляр первым аргументом: `ModuleLED_TurnOn(&device->moduleLed)`. За счёт этого код библиотеки реентерабелен по отношению к экземплярам и обслуживает произвольное их число.
 
 Дескриптор обязателен для всех объектов — библиотек, модулей и приложений. Он содержит поля трёх категорий:
-- **зависимости** — аппаратные функции (`setState`, `getTick`) либо указатели на объекты нижележащего слоя (`LED_st* buzzer`);
-- **колбэки событий** — механизм уведомления вышележащего слоя;
+- **зависимости** — аппаратные функции (`setState`, `getTick`) либо указатели на объекты нижележащего слоя (`LED_st* led`, `Button_st* button`);
+- **колбэки событий** — механизм уведомления вышележащего слоя (`eventCallback`);
 - **`void* context`** — непрозрачный указатель на объект-подписчик. Объект хранит его, но не разыменовывает.
+
+Объект, который является частью другого объекта, хранится как поле его структуры, а не создаётся в `main.c`. Так, модули — поля приложения:
+
+```c
+struct Device{
+	Device_Descriptor_st descriptor;
+
+	ModuleButton_st      moduleButton;
+	ModuleLED_st         moduleLed;
+};
+```
 
 В `Libraries/`, `Modules/` и `Applications/` **глобальные переменные запрещены**: всё состояние хранится в экземпляре объекта.
 
@@ -65,36 +121,35 @@ LED_Init(&led, &ledDescriptor);
 
 | Сущность | Правило | Пример |
 |---|---|---|
-| Файлы | `PascalCase`, аббревиатуры в верхнем регистре | `Button.h`, `LED.h` |
-| Макроконстанты `#define` | `UPPER_SNAKE_CASE` с префиксом модуля | `LED_INDICATIONS_MAX_SIZE` |
-| Перечисление | `Модуль_Имя` + суффикс `_et` | `LED_State_et` |
-| Константы перечисления | `UPPER_SNAKE_CASE` с префиксом | `LED_STATE_OFF` |
-| Структура | `Модуль_Имя` + суффикс `_st` | `LED_Descriptor_st` |
-| Тип указателя на функцию | `Модуль_Имя`, без суффикса | `LED_GetTick` |
-| Тип колбэка события | `Модуль_Событие` + `Callback` | `LED_IndicationIsOverCallback` |
-| Публичная функция | `Модуль_Действие` | `LED_SetIndication` |
-| Обработчик события другого модуля | `Модуль_On` + событие | `ModuleBuzzer_OnIndicationIsOver` |
-| Функция, вызываемая из ISR | базовое имя + `FromISR` | `Button_OnInterruptFromISR` |
-| Тип кода результата | `Модуль_Result_et`, константы `МОДУЛЬ_RESULT_...` | `RC522_Result_et`, `RC522_RESULT_OK` |
-| Функция с внутренним связыванием (`static`) | `camelCase`, без префикса | `getPlayerIdByCardUID` |
-| Переменные и поля | `camelCase`, семантически значимые имена | `indicationRepeatCounter` |
-| Параметры функций| `camelCase` с префиксом `_` | `_led`, `_repeatCount` |
+| Файлы | `PascalCase`, аббревиатуры в верхнем регистре | `Board.h`, `ModuleLED.h` |
+| Макроконстанты `#define` | `UPPER_SNAKE_CASE` с префиксом модуля | `MODULE_BUTTON_HOLD_COUNT` |
+| Перечисление | `Модуль_Имя` + суффикс `_et` | `ModuleButton_Event_et` |
+| Константы перечисления | `UPPER_SNAKE_CASE` с префиксом | `MODULE_BUTTON_EVENT_CLICK` |
+| Структура | `Модуль_Имя` + суффикс `_st` | `ModuleLED_Descriptor_st` |
+| Тип указателя на функцию | `Модуль_Имя`, без суффикса | `LED_SetState` |
+| Тип колбэка события | `Модуль_Событие` + `Callback` | `ModuleButton_EventCallback` |
+| Публичная функция | `Модуль_Действие` | `ModuleLED_TurnOn` |
+| Функция, вызываемая из ISR | базовое имя + `FromISR` | `[Модуль]_[Действие]FromISR` |
+| Тип кода результата | `Модуль_Result_et`, константы `МОДУЛЬ_RESULT_...` | `[Модуль]_Result_et`, `[МОДУЛЬ]_RESULT_OK` |
+| Функция с внутренним связыванием (`static`) | `camelCase`, без префикса | `sendEvent`, `getButtonState` |
+| Обработчик события нижележащего объекта | `static`, `camelCase`: источник + `Event` | `moduleButtonEvent`, `buttonEvent` |
+| Переменные и поля | `camelCase`, семантически значимые имена | `moduleLed`, `indicationRepeatCounter` |
+| Параметры функций | `camelCase` с префиксом `_` | `_moduleButton`, `_event` |
 
 Префикс `_` у параметров визуально отделяет входные данные функции от полей структуры и локальных переменных.
 
 ```c
-void LED_SetIndication(LED_st* _led, LED_Indications_et _indication, uint8_t _repeatCount);
+void ModuleButton_Init(ModuleButton_st* _moduleButton, ModuleButton_Descriptor_st* _descriptor);
 ```
 
 **Модули и приложения:**
-- модули получают префикс `Module`: каталог `Modules/Buzzer/`, файлы `ModuleBuzzer.h/.c`, тип `ModuleBuzzer_st`, функции `ModuleBuzzer_SingleBeep(...)`;
-- приложения именуются собственным именем: `Applications/Terminal/Terminal.c`, `Terminal_st`, `Terminal_Run`.
+- модули получают префикс `Module`: каталог `Modules/ModuleLED/`, файлы `ModuleLED.h/.c`, тип `ModuleLED_st`, функции `ModuleLED_TurnOn(...)`;
+- приложения именуются собственным именем: `Applications/Device/Device.c`, `Device_st`, `Device_Run`.
 
 **Функции без параметров объявляются со списком `(void)`.** В C пустой список `()` означает объявление без прототипа (число и типы аргументов не заданы), что отключает проверку вызовов компилятором:
 
 ```c
-typedef uint32_t (*LED_GetTick)(void);
-void Terminal_Reset(void);
+static uint32_t getTick(void);
 ```
 
 ---
@@ -103,85 +158,59 @@ void Terminal_Reset(void);
 
 Все заголовочные файлы имеют единую структуру. Порядок секций:
 
-1. Include guard — `LED_H_`.
+1. Include guard — `MODULEBUTTON_H_`.
 2. `#include` — все зависимости модуля.
 3. `#define` — макроконстанты.
-4. Предварительные объявления перечислений: `typedef enum LED_State LED_State_et;`
-5. Предварительные объявления структур: `typedef struct LED LED_st;`
+4. Предварительные объявления перечислений: `typedef enum ModuleButton_Event ModuleButton_Event_et;`
+5. Предварительные объявления структур: `typedef struct ModuleButton ModuleButton_st;`
 6. Типы указателей на функции.
 7. Определения `enum`.
 8. Определения `struct`.
 9. Прототипы функций в блоке `extern "C"` — для совместимости с C++ (подавление name mangling).
 
-Предварительные объявления делают все типы модуля видимыми до их определения: например, тип колбэка может принимать `LED_st*` (неполный тип) до определения структуры `LED`.
+Предварительные объявления делают все типы модуля видимыми до их определения: например, тип колбэка `ModuleButton_EventCallback` принимает `ModuleButton_st*` (неполный тип) до определения структуры `ModuleButton`.
 
 <details>
-<summary>Пример заголовочного файла</summary>
+<summary>Пример заголовочного файла: <code>Modules/ModuleButton/ModuleButton.h</code></summary>
 
 ```c
-#ifndef LED_H_
-#define LED_H_
+#ifndef MODULEBUTTON_H_
+#define MODULEBUTTON_H_
 
-#include <stdio.h>
+#include <stddef.h>
 #include <stdint.h>
+#include "Button.h"
 
-#define LED_INDICATIONS_MAX_SIZE       16
-#define LED_INDICATION_INFINITE_REPEAT 255
+#define MODULE_BUTTON_HOLD_COUNT 4
 
-typedef enum LED_Indications LED_Indications_et;
-typedef enum LED_State       LED_State_et;
+typedef enum ModuleButton_Event ModuleButton_Event_et;
 
-typedef struct LED_Indication    LED_Indication_st;
-typedef struct LED_Descriptor    LED_Descriptor_st;
-typedef struct LED               LED_st;
+typedef struct ModuleButton_Descriptor ModuleButton_Descriptor_st;
+typedef struct ModuleButton            ModuleButton_st;
 
-typedef void     (*LED_IndicationIsOverCallback) (LED_st* _led, LED_Indications_et _indication, uint8_t _repeatCounter);
-typedef uint32_t (*LED_GetTick)                  (void);
-typedef void     (*LED_SetState)                 (LED_st* _led, LED_State_et _state);
+typedef void (*ModuleButton_EventCallback)(ModuleButton_st* _moduleButton, ModuleButton_Event_et _event);
 
-enum LED_Indications{
-	LED_INDICATION_OFF,
-	LED_INDICATION_ON,
-	LED_INDICATION_SINGLE_BLINK,
-	LED_INDICATION_DOUBLE_BLINK,
-	LED_INDICATION_TRIPLE_BLINK,
-	LED_INDICATION_CUSTOM
+enum ModuleButton_Event{
+	MODULE_BUTTON_EVENT_CLICK,
+	MODULE_BUTTON_EVENT_HOLD
 };
 
-enum LED_State{
-	LED_STATE_OFF,
-	LED_STATE_ON
+struct ModuleButton_Descriptor{
+	Button_st*                 button;
+	ModuleButton_EventCallback eventCallback;
+	void*                      context;
 };
 
-struct LED_Indication{
-	uint8_t  states[LED_INDICATIONS_MAX_SIZE];
-	uint32_t durations[LED_INDICATIONS_MAX_SIZE];
-	uint8_t  size;
-};
-
-struct LED_Descriptor{
-	LED_SetState                 setState;
-	LED_GetTick                  getTick;
-	LED_IndicationIsOverCallback indicationIsOverCallback;
-	void*                        context;
-};
-
-struct LED{
-	LED_Descriptor_st  descriptor;
-	LED_Indications_et currentIndication;
-	LED_Indication_st* customIndication;
-	uint8_t            indicationRepeatCount;
-	uint8_t            indicationRepeatCounter;
-	uint8_t            indicationDescriptorCounter;
-	uint32_t           currentTime;
+struct ModuleButton{
+	ModuleButton_Descriptor_st descriptor;
 };
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-void LED_Init(LED_st* _led, LED_Descriptor_st* _descriptor);
-void LED_Run(LED_st* _led);
+void ModuleButton_Init(ModuleButton_st* _moduleButton, ModuleButton_Descriptor_st* _descriptor);
+void ModuleButton_Run(ModuleButton_st* _moduleButton);
 
 #ifdef __cplusplus
 }
@@ -198,209 +227,242 @@ void LED_Run(LED_st* _led);
 
 Порядок секций (отсутствующие секции опускаются):
 
-1. `#include` **только собственного** заголовка — транзитивные зависимости подключены в `.h`.
+1. `#include` **только собственного** заголовка — транзитивные зависимости подключены в `.h`. Исключение — `Board.c`, который дополнительно подключает `main.h` (см. [раздел 5](#board)).
 2. Данные модуля — константные таблицы, предопределённые наборы.
 3. Прототипы `static` функций.
 4. Публичные функции — в порядке объявления в `.h`; первыми идут `_Init` и `_Run`.
-5. Обработчики событий нижележащего слоя `[Модуль]_On[Событие]`.
-6. Определения `static` функций.
+5. Определения `static` функций: сначала обработчики событий нижележащих объектов, затем вспомогательные функции.
+
+<details>
+<summary>Пример файла реализации: <code>Modules/ModuleButton/ModuleButton.c</code></summary>
+
+```c
+#include "ModuleButton.h"
+
+static void buttonEvent(Button_st* _button, ButtonEvent_et _event, uint8_t _counter);
+static void sendEvent(ModuleButton_st* _moduleButton, ModuleButton_Event_et _event);
+
+void ModuleButton_Init(ModuleButton_st* _moduleButton, ModuleButton_Descriptor_st* _descriptor){
+	_moduleButton->descriptor = *_descriptor;
+
+	Button_SetEventCallback(_moduleButton->descriptor.button, buttonEvent);
+}
+
+void ModuleButton_Run(ModuleButton_st* _moduleButton){
+	Button_Run(_moduleButton->descriptor.button);
+}
+
+static void buttonEvent(Button_st* _button, ButtonEvent_et _event, uint8_t _counter){
+	ModuleButton_st* moduleButton = (ModuleButton_st*)_button->descriptor.context;
+
+	switch(_event){
+	case BUTTON_EVENT_CLICK:{
+		if(_counter == 1){
+			sendEvent(moduleButton, MODULE_BUTTON_EVENT_CLICK);
+		}
+		break;
+	}
+
+	case BUTTON_EVENT_HOLD:{
+		if(_counter == MODULE_BUTTON_HOLD_COUNT){
+			sendEvent(moduleButton, MODULE_BUTTON_EVENT_HOLD);
+		}
+		break;
+	}
+
+	default: break;
+	}
+}
+
+static void sendEvent(ModuleButton_st* _moduleButton, ModuleButton_Event_et _event){
+	if(_moduleButton->descriptor.eventCallback != NULL){
+		_moduleButton->descriptor.eventCallback(_moduleButton, _event);
+	}
+}
+```
+
+</details>
 
 ### Жизненный цикл объекта
 
-- **`_Init(obj, descriptor)`** — копирует дескриптор в объект и явно инициализирует **все** остальные поля. Полагаться на неявное обнуление (`.bss`, `= {0}` в точке определения) запрещено.
-- **`_Run(obj)`** — вызывается циклически из суперцикла или задачи RTOS. Функция **обязана быть неблокирующей**: запрещены `HAL_Delay`, busy-wait и любые ожидания. Отсчёт времени ведётся по `getTick()`. `_Run` вышележащего объекта вызывает `_Run` своих зависимостей.
-- Опциональные колбэки перед вызовом проверяются на `NULL`.
+- **`_Init(obj, descriptor)`** — копирует дескриптор в объект (`_moduleLed->descriptor = *_descriptor;`) и явно инициализирует **все** остальные поля. Полагаться на неявное обнуление (`.bss`, `= {0}` в точке определения) запрещено. Если объект содержит вложенные объекты (приложение — модули), `_Init` формирует для них дескрипторы и вызывает их `_Init`.
+- **`_Run(obj)`** — вызывается циклически из суперцикла или задачи RTOS. Функция **обязана быть неблокирующей**: запрещены `HAL_Delay`, busy-wait и любые ожидания. Отсчёт времени ведётся по `getTick()`. `_Run` вышележащего объекта вызывает `_Run` своих зависимостей:
+
+  ```c
+  void Device_Run(Device_st* _device){
+  	ModuleButton_Run(&_device->moduleButton);
+  	ModuleLED_Run(&_device->moduleLed);
+  }
+  ```
+
+- Опциональные колбэки перед вызовом проверяются на `NULL` (см. `sendEvent` выше).
 
 ### Время и переполнение счётчика тиков
 
 32-битный счётчик миллисекунд `getTick()` переполняется через 2³² мс ≈ **49,7 суток** и возобновляет отсчёт с нуля. При некорректном сравнении времени после переполнения таймеры срабатывают немедленно либо не срабатывают никогда. Дефект проявляется только при длительной непрерывной работе и не воспроизводится при стендовой отладке.
 
+**Некорректно — вычислять момент окончания** (фрагмент `Button.c`):
+
+```c
+button->descriptor.getTick() > button->debounceDescriptor.changeTime + BUTTON_DEBOUNCE_TIME_MS
+```
+
+Сумма `changeTime + BUTTON_DEBOUNCE_TIME_MS` вблизи переполнения переходит через ноль, после чего условие становится истинным немедленно.
+
 **Корректно — фиксировать момент начала и сравнивать прошедший интервал:**
 
 ```c
-if((currentTime - _led->startTime) >= _led->duration){
+uint32_t currentTime = button->descriptor.getTick();
+
+if((currentTime - button->debounceDescriptor.changeTime) >= BUTTON_DEBOUNCE_TIME_MS){
 	...
 }
 ```
 
 Беззнаковая арифметика в C выполняется по модулю 2ᴺ, поэтому разность корректна и при переходе через ноль: `0x00000010 - 0xFFFFFFF0 = 0x20`, то есть фактически прошедшие 32 мс.
 
-**Некорректно — вычислять момент окончания:**
-
-```c
-uint32_t deadline = startTime + duration;   // возможно переполнение
-
-if(currentTime >= deadline){                // ложное срабатывание или его отсутствие
-	...
-}
-```
-
 Требования:
-- в объекте хранится **момент начала** (`startTime`), а не момент окончания;
+- в объекте хранится **момент начала** интервала (`changeTime`), а не момент окончания;
 - сравнение выполняется строго в форме `(currentTime - startTime) >= duration`;
 - текущее время, момент начала и длительность имеют **один беззнаковый тип**, по умолчанию `uint32_t`. Для более узкого тика (например, `uint16_t`) разность явно приводится к этому типу: `(uint16_t)(currentTime - startTime)`. В противном случае integer promotion расширит операнды до `int`, и разность станет отрицательной;
 - значение `getTick()` считывается **однократно** в начале `_Run` и используется до конца прохода — это обеспечивает согласованный временной срез для всех проверок;
-- единица измерения указывается в имени поля или константы, если она не очевидна из контекста: `timeoutMs`, `LED_BLINK_PERIOD_MS`;
+- единица измерения указывается в имени поля или константы, если она не очевидна из контекста: `BUTTON_DEBOUNCE_TIME_MS`;
 - длительность интервала не может превышать период переполнения счётчика. Длительные интервалы (часы, сутки) отсчитываются отдельным счётчиком более крупных единиц (например, секунд, инкрементируемых каждые 1000 мс).
 
 **В unit-тестах** заглушка `getTick` инициализируется значением вблизи переполнения, например `0xFFFFFF00`, чтобы тесты покрывали переход счётчика через ноль.
 
 ### События: колбэки и context
 
-Объект генерирует событие вызовом колбэка из своего дескриптора. Первым аргументом колбэк получает объект-источник, поэтому обработчик идентифицирует **отправителя**. Через `descriptor.context` обработчик получает **свой** экземпляр — объект-подписчик.
+Объект генерирует событие вызовом колбэка из своего дескриптора. Первым аргументом колбэк получает объект-источник, поэтому обработчик идентифицирует **отправителя**. Через `descriptor.context` источника обработчик получает **свой** экземпляр — объект-подписчик.
 
 Таким образом событие связывает конкретную пару экземпляров. Это исключает глобальные указатели и диспетчеризацию вида `if(_x == instance->x)` и не ограничивает число экземпляров.
 
-Пример: модуль зуммера подписан на событие LED и транслирует собственное событие вышележащему слою.
+Пример: `ModuleButton` генерирует события `CLICK` / `HOLD`, приложение `Device` подписывается на них при инициализации модуля.
 
 ```c
-// ModuleBuzzer.h (фрагмент)
-typedef void (*ModuleBuzzer_BeepIsOverCallback)(ModuleBuzzer_st* _moduleBuzzer);
+// ModuleButton.h (фрагмент)
+typedef void (*ModuleButton_EventCallback)(ModuleButton_st* _moduleButton, ModuleButton_Event_et _event);
 
-struct ModuleBuzzer_Descriptor{
-	LED_st*                         buzzer;
-	ModuleBuzzer_BeepIsOverCallback beepIsOverCallback;
-	void*                           context;
+struct ModuleButton_Descriptor{
+	Button_st*                 button;
+	ModuleButton_EventCallback eventCallback;
+	void*                      context;
 };
-
-struct ModuleBuzzer{
-	ModuleBuzzer_Descriptor_st descriptor;
-};
-
-void ModuleBuzzer_Init(ModuleBuzzer_st* _moduleBuzzer, ModuleBuzzer_Descriptor_st* _descriptor);
-void ModuleBuzzer_Run(ModuleBuzzer_st* _moduleBuzzer);
-void ModuleBuzzer_SingleBeep(ModuleBuzzer_st* _moduleBuzzer);
-void ModuleBuzzer_OnIndicationIsOver(LED_st* _led, LED_Indications_et _indication, uint8_t _repeatCounter);
 ```
 
 ```c
-// ModuleBuzzer.c
-#include "ModuleBuzzer.h"
+// Device.c
+#include "Device.h"
 
-void ModuleBuzzer_Init(ModuleBuzzer_st* _moduleBuzzer, ModuleBuzzer_Descriptor_st* _descriptor){
-	_moduleBuzzer->descriptor = *_descriptor;
+static void moduleButtonEvent(ModuleButton_st* _moduleButton, ModuleButton_Event_et _event);
+
+void Device_Init(Device_st* _device, Device_Descriptor_st* _descriptor){
+	_device->descriptor = *_descriptor;
+
+	ModuleLED_Descriptor_st moduleLedDescriptor = {
+		.led = _descriptor->led,
+	};
+	ModuleLED_Init(&_device->moduleLed, &moduleLedDescriptor);
+
+	ModuleButton_Descriptor_st moduleButtonDescriptor = {
+		.button        = _descriptor->button,
+		.eventCallback = moduleButtonEvent,
+		.context       = _device,
+	};
+	ModuleButton_Init(&_device->moduleButton, &moduleButtonDescriptor);
 }
 
-void ModuleBuzzer_Run(ModuleBuzzer_st* _moduleBuzzer){
-	LED_Run(_moduleBuzzer->descriptor.buzzer);
+void Device_Run(Device_st* _device){
+	ModuleButton_Run(&_device->moduleButton);
+	ModuleLED_Run(&_device->moduleLed);
 }
 
-void ModuleBuzzer_SingleBeep(ModuleBuzzer_st* _moduleBuzzer){
-	LED_SetIndication(_moduleBuzzer->descriptor.buzzer, LED_INDICATION_SINGLE_BLINK, 1);
-}
+static void moduleButtonEvent(ModuleButton_st* _moduleButton, ModuleButton_Event_et _event){
+	Device_st* device = (Device_st*)_moduleButton->descriptor.context;
 
-void ModuleBuzzer_OnIndicationIsOver(LED_st* _led, LED_Indications_et _indication, uint8_t _repeatCounter){
-	ModuleBuzzer_st* moduleBuzzer = (ModuleBuzzer_st*)_led->descriptor.context;
+	switch(_event){
+	case MODULE_BUTTON_EVENT_CLICK:{
+		ModuleLED_TurnOn(&device->moduleLed);
+		break;
+	}
 
-	if(moduleBuzzer->descriptor.beepIsOverCallback != NULL){
-		moduleBuzzer->descriptor.beepIsOverCallback(moduleBuzzer);
+	case MODULE_BUTTON_EVENT_HOLD:{
+		ModuleLED_TurnOff(&device->moduleLed);
+		break;
+	}
+
+	default: break;
 	}
 }
 ```
 
-Обработка события на уровне приложения выполняется аналогично:
-
-```c
-void Terminal_OnBeepIsOver(ModuleBuzzer_st* _moduleBuzzer){
-	Terminal_st* terminal = (Terminal_st*)_moduleBuzzer->descriptor.context;
-
-	terminal->state = TERMINAL_STATE_IDLE;
-}
-```
+Подписка выполняется тем объектом, который получает источник события:
+- если источник — вложенный объект (модуль внутри приложения), подписчик заполняет `eventCallback` и `context` в дескрипторе при вызове его `_Init` (`Device_Init` выше);
+- если источник создан другим слоем (объект библиотеки, созданный в `Board_Init` с `eventCallback = NULL`), подписчик назначает колбэк через функцию `_SetEventCallback` в своём `_Init`: `Button_SetEventCallback(_moduleButton->descriptor.button, buttonEvent);`.
 
 Требования:
-- обработчик события другого модуля — **публичная** функция `[Модуль]_On[Событие]`, сигнатура которой точно соответствует типу колбэка. Она объявляется в `.h` для возможности указания в дескрипторе;
-- одно событие — один подписчик. Рассылка нескольким получателям (fan-out) выполняется обработчиком на уровне приложения;
+- обработчик события — `static` функция в `.c`-файле подписчика, сигнатура которой точно соответствует типу колбэка;
+- одно событие — один подписчик. Рассылка нескольким получателям (fan-out) выполняется обработчиком подписчика;
 - **weak-символы для событий запрещены**: опечатка в имени не диагностируется линковщиком, переопределение возможно только однократно на образ прошивки, семантика зависит от тулчейна.
 
 ### Обработка ошибок
 
-Каждая библиотека и каждый модуль, операции которых могут завершиться ошибкой, определяют собственный тип кода результата `[Модуль]_Result_et`. Первая константа — `_OK` со значением `0`:
+> В эталонном проекте пока нет объектов с путями отказа, поэтому правила ниже приведены без примеров кода. `[Модуль]` обозначает префикс конкретной библиотеки или модуля.
 
-```c
-enum RC522_Result{
-	RC522_RESULT_OK,
-	RC522_RESULT_BUSY,
-	RC522_RESULT_ERROR_INVALID_ARGUMENT,
-	RC522_RESULT_ERROR_BUS,
-	RC522_RESULT_ERROR_TIMEOUT,
-	RC522_RESULT_ERROR_CRC
-};
-```
+Каждая библиотека и каждый модуль, операции которых могут завершиться ошибкой, определяют собственный тип кода результата `[Модуль]_Result_et`. Первая константа — `[МОДУЛЬ]_RESULT_OK` со значением `0`, далее — `_BUSY`, `_ERROR_INVALID_ARGUMENT`, `_ERROR_TIMEOUT` и т.п.
 
 Ошибки передаются по двум каналам в зависимости от момента их обнаружения.
 
 **1. Синхронно — через возвращаемое значение.** Функция возвращает код результата, если ошибка может быть обнаружена в момент вызова: недопустимый аргумент, объект занят, аппаратная функция вернула ошибку. Выходные данные в этом случае передаются через выходные параметры-указатели, расположенные в конце списка аргументов.
 
-```c
-RC522_Result_et RC522_StartReading(RC522_st* _rc522);
-RC522_Result_et RC522_GetUID(RC522_st* _rc522, uint8_t* _uid, uint8_t* _size);
-```
-
-**2. Асинхронно — через колбэк ошибки.** Поскольку `_Run` неблокирующая, часть ошибок выявляется через несколько итераций цикла: истечение таймаута ответа устройства, несовпадение CRC. Такие ошибки передаются через колбэк из дескриптора:
-
-```c
-typedef void (*RC522_ErrorCallback)(RC522_st* _rc522, RC522_Result_et _result);
-```
+**2. Асинхронно — через колбэк ошибки.** Поскольку `_Run` неблокирующая, часть ошибок выявляется через несколько итераций цикла: истечение таймаута ответа устройства, несовпадение CRC. Такие ошибки передаются через колбэк из дескриптора с сигнатурой `void (*[Модуль]_ErrorCallback)([Модуль]_st* _obj, [Модуль]_Result_et _result)`.
 
 Требования:
-- **Функции, не имеющие путей отказа, возвращают `void`.** Возврат безусловного `_OK` ради единообразия запрещён (`LED_SetIndication`).
-- **Код результата обязан проверяться.** Намеренное игнорирование выражается явным приведением: `(void)RC522_StartReading(&rc522);`.
-- **Аппаратные функции с путями отказа возвращают тип результата своей библиотеки.** `Board/` транслирует статус HAL в этот тип; `HAL_StatusTypeDef` за пределы `Board/` не распространяется:
-
-  ```c
-  RC522_Result_et BoardRC522_Transmit(RC522_st* _rc522, uint8_t* _data, uint16_t _size){
-  	if(HAL_SPI_Transmit(&hspi1, _data, _size, BOARDRC522_SPI_TIMEOUT) != HAL_OK){
-  		return RC522_RESULT_ERROR_BUS;
-  	}
-
-  	return RC522_RESULT_OK;
-  }
-  ```
-
-- **Каждый слой использует собственный тип результата.** Модуль не пробрасывает `RC522_Result_et`, а отображает его в `ModuleRFID_Result_et`. Это изолирует приложение от конкретной реализации (чипа) внутри модуля.
+- **Функции, не имеющие путей отказа, возвращают `void`.** Возврат безусловного `_OK` ради единообразия запрещён (`LED_SetIndication`, `ModuleLED_TurnOn`).
+- **Код результата обязан проверяться.** Намеренное игнорирование выражается явным приведением к `(void)`.
+- **Аппаратные функции с путями отказа возвращают тип результата своей библиотеки.** `Board.c` транслирует статус HAL (`HAL_OK` / ошибка) в этот тип; `HAL_StatusTypeDef` за пределы `Board/` не распространяется.
+- **Каждый слой использует собственный тип результата.** Модуль не пробрасывает тип результата библиотеки, а отображает его в свой. Это изолирует приложение от конкретной реализации (чипа) внутри модуля.
 - **Аргументы, поступающие извне (индекс, размер, номер канала), валидируются**; при нарушении возвращается `_ERROR_INVALID_ARGUMENT`. Указатель на собственный экземпляр не валидируется: передача `NULL` вместо объекта — нарушение контракта (ошибка программиста), а не runtime-ситуация.
 - **Библиотеки и модули не определяют политику обработки ошибок**: не входят в бесконечный цикл, не вызывают `Error_Handler()`, не выполняют сброс МК. Их ответственность — только сообщить об ошибке. Стратегию восстановления (повтор, индикация, сброс) определяет приложение.
 
 ---
 
-## 5. Аппаратный слой: `Board/` и `main.c`
+## 5. Аппаратный слой: Board и main.c
 
-### Board/
+### Board
 
-Каталог содержит все функции, обращающиеся к HAL. Размещение их в `main.c` приводит к неконтролируемому росту файла при большом числе устройств, поэтому для каждого физического устройства выделяется отдельная пара файлов:
+На текущем этапе аппаратный слой описывается одной парой файлов:
 
 ```
 Board/
-├── Board.h              ← агрегирующий заголовок всех Board*.h, подключается в main.c
-├── Board.c              ← общеплатные функции (критические секции и т.п.)
-├── BoardBuzzer.h / .c
-├── BoardRC522.h / .c
-└── BoardDisplay.h / .c
+├── Board.h   ← структура Board_st с объектами устройств платы и прототип Board_Init; не зависит от HAL
+└── Board.c   ← аппаратные функции поверх HAL и инициализация объектов платы
 ```
 
-Требования:
-- именование: файлы `Board[Устройство]`, функции `Board[Устройство]_[Действие]`, например `BoardBuzzer_SetState`;
-- сигнатура функции **точно соответствует** типу указателя на функцию из библиотеки, что позволяет присвоить её полю дескриптора без адаптеров;
-- **одна функция — одно устройство.** Для двух светодиодов реализуются `BoardLedRed_SetState` и `BoardLedGreen_SetState`, а не одна функция с диспетчеризацией `if(_led == &ledRed)`. Это исключает зависимость `Board/` от экземпляров, объявленных в `main.c`;
-- состояние и бизнес-логика запрещены — только вызовы HAL;
-- `Board/` зависит от библиотек (использует их типы); обратная зависимость запрещена;
-- дескрипторы периферии (`huart1`, `hspi1`) получаются из сгенерированных заголовков. В CubeMX для этого включается опция *Generate peripheral initialization as a pair of .c/.h files per peripheral*, после чего подключаются `usart.h`, `spi.h` и т.д. При отключённой опции дескрипторы объявляются через `extern` в `.c`-файле устройства;
-- файлы оформляются по общим правилам для `.h` / `.c` (разделы 3 и 4).
+`Board_st` содержит по одному экземпляру библиотеки на каждое физическое устройство. Поля именуются по роли устройства на плате: `buttonMain`, `ledMain`.
 
 ```c
-// BoardBuzzer.h
-#ifndef BOARDBUZZER_H_
-#define BOARDBUZZER_H_
+// Board.h
+#ifndef BOARD_H_
+#define BOARD_H_
 
-#include "main.h"
+#include <stddef.h>
+#include <stdint.h>
+#include "Button.h"
 #include "LED.h"
+
+typedef struct Board Board_st;
+
+struct Board{
+	Button_st buttonMain;
+	LED_st    ledMain;
+};
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-void BoardBuzzer_SetState(LED_st* _led, LED_State_et _state);
+void Board_Init(Board_st* _board);
 
 #ifdef __cplusplus
 }
@@ -410,60 +472,143 @@ void BoardBuzzer_SetState(LED_st* _led, LED_State_et _state);
 ```
 
 ```c
-// BoardBuzzer.c
-#include "BoardBuzzer.h"
+// Board.c
+#include "Board.h"
+#include "main.h"
 
-void BoardBuzzer_SetState(LED_st* _led, LED_State_et _state){
-	HAL_GPIO_WritePin(BUZZER_GPIO_Port, BUZZER_Pin, (_state == LED_STATE_ON) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+static Board_st* boardInstance = NULL;
+
+static uint32_t       getTick(void);
+static ButtonState_et getButtonState(Button_st* _button);
+static void           setLedState(LED_st* _led, LED_State_et _state);
+
+void Board_Init(Board_st* _board){
+	boardInstance = _board;
+
+	ButtonDescriptor_st buttonDescriptor = {
+		.getState      = getButtonState,
+		.getTick       = getTick,
+		.eventCallback = NULL,
+		.context       = NULL,
+	};
+	Button_Init(&_board->buttonMain, &buttonDescriptor);
+
+	LED_Descriptor_st ledDescriptor = {
+		.setState                 = setLedState,
+		.getTick                  = getTick,
+		.indicationIsOverCallback = NULL,
+		.context                  = NULL,
+	};
+	LED_Init(&_board->ledMain, &ledDescriptor);
+}
+
+static uint32_t getTick(void){
+	return HAL_GetTick();
+}
+
+static ButtonState_et getButtonState(Button_st* _button){
+	if(_button == &boardInstance->buttonMain){
+		if(HAL_GPIO_ReadPin(BUTTON_MAIN_GPIO_Port, BUTTON_MAIN_Pin) == GPIO_PIN_SET){
+			return BUTTON_STATE_PRESSED;
+		}
+	}
+
+	return BUTTON_STATE_RELEASED;
+}
+
+static void setLedState(LED_st* _led, LED_State_et _state){
+	if(_led == &boardInstance->ledMain){
+		if(_state == LED_STATE_ON){
+			HAL_GPIO_WritePin(LED_MAIN_GPIO_Port, LED_MAIN_Pin, GPIO_PIN_SET);
+		}
+		else{
+			HAL_GPIO_WritePin(LED_MAIN_GPIO_Port, LED_MAIN_Pin, GPIO_PIN_RESET);
+		}
+	}
 }
 ```
 
+Требования:
+- **`Board.h` не зависит от HAL**: подключает только заголовки библиотек. `main.h` и заголовки периферии подключаются исключительно в `Board.c`. Благодаря этому приложение и `main.c` видят только типы библиотек;
+- **`Board_Init`** сохраняет указатель на экземпляр платы в `static` переменной `boardInstance`, заполняет дескрипторы аппаратными функциями и вызывает `_Init` каждого объекта платы. Колбэки событий и `context` устанавливаются в `NULL` — на события подписывается вышележащий слой (см. [События](#события-колбэки-и-context));
+- **аппаратные функции — `static`**, именуются в `camelCase` без префикса (`getButtonState`, `setLedState`). Их сигнатура **точно соответствует** типу указателя на функцию из библиотеки, что позволяет присвоить её полю дескриптора без адаптеров;
+- одна аппаратная функция обслуживает все объекты своего типа. Устройство определяется сравнением указателя на объект с полями `boardInstance`: `if(_led == &boardInstance->ledMain)`. Для неизвестного объекта функция ничего не делает или возвращает безопасное значение (`BUTTON_STATE_RELEASED`);
+- функции HAL не передаются в дескрипторы напрямую — только через обёртки `Board.c` (`getTick` вместо `HAL_GetTick`);
+- бизнес-логика запрещена — только вызовы HAL и выбор устройства. Единственное допустимое состояние — указатель `boardInstance`;
+- `Board/` зависит от библиотек; обратная зависимость запрещена;
+- дескрипторы периферии (`huart1`, `hspi1`) получаются из сгенерированных заголовков. В CubeMX для этого включается опция *Generate peripheral initialization as a pair of .c/.h files per peripheral*, после чего в `Board.c` подключаются `usart.h`, `spi.h` и т.д. При отключённой опции дескрипторы объявляются через `extern` в `Board.c`;
+- колбэки вендорского HAL (`HAL_GPIO_EXTI_Callback` и т.п.) размещаются в `Board.c`, поскольку только он имеет доступ к объектам платы и HAL (см. [раздел 6](#6-прерывания-и-разделяемые-данные));
+- файлы оформляются по общим правилам для `.h` / `.c` (разделы 3 и 4).
+
 ### main.c
 
-`main.c` выполняет роль composition root: создаёт объекты, связывает их и запускает систему. Аппаратные функции в нём не реализуются.
+`main.c` выполняет роль composition root: создаёт плату и приложение, передаёт приложению объекты платы и запускает систему. Аппаратные функции и колбэки в нём не реализуются.
 
-Если `main.c` сгенерирован конфигуратором, пользовательский код размещается **исключительно** внутри блоков `/* USER CODE BEGIN … */ … /* USER CODE END … */`, чтобы сохраниться при перегенерации. В `USER CODE BEGIN Includes` подключаются `Board.h` и заголовок приложения.
+Если `main.c` сгенерирован конфигуратором, пользовательский код размещается **исключительно** внутри блоков `/* USER CODE BEGIN … */ … /* USER CODE END … */`, чтобы сохраниться при перегенерации. В `USER CODE BEGIN Includes` подключаются `Board.h` и заголовок приложения:
 
-В `USER CODE BEGIN 0` код разделён на секции с маркерами `//-----Имя-----` (между секциями — три пустые строки; внутри — подсекции по устройствам, например `//-----Buzzer-----`):
+```c
+/* USER CODE BEGIN Includes */
+#include "Board.h"
+#include "Device.h"
+/* USER CODE END Includes */
+```
+
+В `USER CODE BEGIN 0` код разделён на секции с маркерами `//-----Имя-----` (между секциями — три пустые строки):
 
 | Секция | Содержимое |
 |---|---|
-| `//-----Variables-----` | Экземпляры объектов с инициализатором `= {0}`, выровненные по колонкам. Порядок: библиотеки, модули, приложение |
-| `//-----Descriptors-----` | Дескрипторы с назначенными инициализаторами (designated initializers): функции из `Board/` и связи событий (колбэк + `context`) |
-| `//-----Callbacks-----` | Только колбэки вендорского HAL (`HAL_GPIO_EXTI_Callback` и т.п.), транслирующие аппаратные события в библиотеки. Размещаются здесь, поскольку обращаются к экземплярам из `main.c`. **Бизнес-логика запрещена** |
-
-В результате `main.c` содержит полную схему связей проекта: граф зависимостей и подписок.
+| `//-----Variables-----` | Экземпляры платы и приложения с инициализатором `= {0}`, выровненные по колонкам. Порядок: плата, приложение |
+| `//-----Descriptors-----` | Дескриптор приложения с назначенными инициализаторами (designated initializers): указатели на объекты платы |
 
 ```c
-//-----Descriptors-----
-LED_Descriptor_st buzzerDescriptor = {
-	.setState                 = BoardBuzzer_SetState,
-	.getTick                  = HAL_GetTick,
-	.indicationIsOverCallback = ModuleBuzzer_OnIndicationIsOver,
-	.context                  = &moduleBuzzer,
-};
+/* USER CODE BEGIN 0 */
+//-----Variables-----
+Board_st  board  = {0};
+Device_st device = {0};
+//-----Variables-----
 
-ModuleBuzzer_Descriptor_st moduleBuzzerDescriptor = {
-	.buzzer             = &buzzer,
-	.beepIsOverCallback = Terminal_OnBeepIsOver,
-	.context            = &terminal,
+
+
+//-----Descriptors-----
+Device_Descriptor_st deviceDescriptor = {
+	.button = &board.buttonMain,
+	.led    = &board.ledMain,
 };
 //-----Descriptors-----
+/* USER CODE END 0 */
 ```
 
+В результате `main.c` показывает, какие физические устройства платы использует приложение. Связи между модулями и подписки на события находятся внутри приложения.
+
 Последовательность в `main()`:
-1. после инициализации периферии вызываются `_Init` в порядке снизу вверх: библиотеки → модули → приложение;
-2. в суперцикле (или задаче RTOS) вызывается только `_Run` приложения: `Terminal_Run(&terminal);`.
+1. после инициализации периферии (`MX_GPIO_Init()` и т.п.) вызывается `Board_Init`, затем `_Init` приложения;
+2. в суперцикле (или задаче RTOS) вызывается только `_Run` приложения.
+
+```c
+  /* USER CODE BEGIN 2 */
+  Board_Init(&board);
+  Device_Init(&device, &deviceDescriptor);
+  /* USER CODE END 2 */
+
+  /* Infinite loop */
+  /* USER CODE BEGIN WHILE */
+  while (1)
+  {
+	  Device_Run(&device);
+    /* USER CODE END WHILE */
+```
 
 ---
 
 ## 6. Прерывания и разделяемые данные
 
+> В эталонном проекте прерывания пока не используются, поэтому правила ниже приведены без примеров кода.
+
 Прерывание может вытеснить `_Run` в произвольной точке. Модификация одних данных из обоих контекстов приводит к состоянию гонки (race condition) — недетерминированному дефекту, который проявляется редко и не воспроизводится под отладчиком. Базовое правило: **ISR только регистрирует факт события, обработка выполняется в `_Run`** (deferred processing).
 
 ### Допустимые операции в ISR
 
-- Вендорский колбэк в `main.c` вызывает функцию библиотеки с суффиксом `FromISR`, например `Button_OnInterruptFromISR(&button)`. Иные вызовы из контекста прерывания запрещены.
+- Вендорский колбэк в `Board.c` вызывает функцию библиотеки с суффиксом `FromISR` для соответствующего объекта платы: `[Модуль]_[Действие]FromISR(&boardInstance->[устройство])`. Иные вызовы из контекста прерывания запрещены.
 - Функция `...FromISR` выполняет минимальное действие: инкремент счётчика, запись байта в кольцевой буфер, фиксация метки времени. Как правило, это одна-две строки.
 - **Колбэки событий из контекста прерывания не вызываются.** Объект генерирует события только из `_Run`. Благодаря этому вся логика модулей и приложения исполняется в основном контексте и не требует синхронизации.
 - В ISR запрещены ожидания, циклы опроса, вызовы `HAL_Delay`, `printf` и ресурсоёмких функций HAL.
@@ -476,37 +621,42 @@ ModuleBuzzer_Descriptor_st moduleBuzzerDescriptor = {
 
 - Поле, модифицируемое в ISR, объявляется `volatile`. Без квалификатора компилятор вправе кэшировать значение в регистре, и `_Run` не увидит изменения.
 - `volatile` **не обеспечивает атомарность**. Разрядность разделяемого поля не должна превышать разрядность шины/ядра МК: на 32-битном Cortex-M — до `uint32_t`, на 8-битном AVR — только `uint8_t`.
-- Если данные невозможно разделить по принципу единственного писателя (несколько полей, изменяемых согласованно), применяется критическая секция. Она является аппаратной зависимостью и передаётся через дескриптор: поля `enterCritical` / `exitCritical`, реализации `Board_EnterCritical` / `Board_ExitCritical` в `Board.c`. Реализация обязана поддерживать вложенность (сохранять и восстанавливать `PRIMASK`, а не безусловно вызывать `__enable_irq()`). Внутри критической секции допускается только копирование данных.
+- Если данные невозможно разделить по принципу единственного писателя (несколько полей, изменяемых согласованно), применяется критическая секция. Она является аппаратной зависимостью и передаётся через дескриптор: поля `enterCritical` / `exitCritical`, реализации — `static` функции `enterCritical` / `exitCritical` в `Board.c`. Реализация обязана поддерживать вложенность (сохранять и восстанавливать `PRIMASK`, а не безусловно вызывать `__enable_irq()`). Внутри критической секции допускается только копирование данных.
 
 ### RTOS
 
-Каждый объект принадлежит ровно одной задаче: `_Run` и все функции объекта вызываются только из её контекста. Межзадачный обмен выполняется средствами RTOS (очереди, task notifications). Функции RTOS также передаются через дескриптор и реализуются в `Board/`.
+Каждый объект принадлежит ровно одной задаче: `_Run` и все функции объекта вызываются только из её контекста. Межзадачный обмен выполняется средствами RTOS (очереди, task notifications). Функции RTOS также передаются через дескриптор и реализуются в `Board.c`.
 
 ---
 
 ## 7. Форматирование
 
 - Отступ — символ табуляции.
-- Открывающая фигурная скобка — на той же строке без пробела: `struct LED{`, `void LED_Run(LED_st* _led){`.
-- Символ `*` указателя примыкает к типу: `LED_st* _led`.
+- Открывающая фигурная скобка — на той же строке без пробела: `struct ModuleLED{`, `void ModuleLED_Run(ModuleLED_st* _moduleLed){`.
+- Символ `*` указателя примыкает к типу: `ModuleLED_st* _moduleLed`.
 - После ключевых слов `if`, `for`, `while`, `switch` пробел не ставится: `if(...)`.
 - `else` размещается на новой строке после `}`:
 
   ```c
-  if(state == LED_STATE_ON){
-  	...
+  if(_state == LED_STATE_ON){
+  	HAL_GPIO_WritePin(LED_MAIN_GPIO_Port, LED_MAIN_Pin, GPIO_PIN_SET);
   }
   else{
-  	...
+  	HAL_GPIO_WritePin(LED_MAIN_GPIO_Port, LED_MAIN_Pin, GPIO_PIN_RESET);
   }
   ```
 
 - В `switch` метки `case` на уровне отступа `switch`, тело каждой ветви заключено в фигурные скобки, `break;` внутри них; последней веткой идёт `default: break;`:
 
   ```c
-  switch(terminal->state){
-  case TERMINAL_STATE_START:{
-  	...
+  switch(_event){
+  case MODULE_BUTTON_EVENT_CLICK:{
+  	ModuleLED_TurnOn(&device->moduleLed);
+  	break;
+  }
+
+  case MODULE_BUTTON_EVENT_HOLD:{
+  	ModuleLED_TurnOff(&device->moduleLed);
   	break;
   }
 
@@ -514,8 +664,13 @@ ModuleBuzzer_Descriptor_st moduleBuzzerDescriptor = {
   }
   ```
 
-- Однородные строки (`#define`, объявления типов, поля структур) выравниваются по колонкам.
-- Присваивание нового состояния конечного автомата (`terminal->state = ...;`) — последний оператор блока, отделённый пустой строкой.
+- Однородные строки (`#define`, объявления типов, поля структур, поля дескрипторов в инициализаторах) выравниваются по колонкам:
+
+  ```c
+  static uint32_t       getTick(void);
+  static ButtonState_et getButtonState(Button_st* _button);
+  static void           setLedState(LED_st* _led, LED_State_et _state);
+  ```
+
+- Присваивание нового состояния конечного автомата (`state = ...;`) — последний оператор блока, отделённый пустой строкой.
 - Секции обрамляются парными комментариями-маркерами `//-----Имя-----`.
-
-
