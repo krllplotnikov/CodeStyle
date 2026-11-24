@@ -470,44 +470,7 @@ ModuleBuzzer_Descriptor_st moduleBuzzerDescriptor = {
 
 ### Передача данных из ISR
 
-**Принцип единственного писателя (single writer).** Каждая разделяемая переменная модифицируется только одним контекстом — ISR либо `_Run`. При соблюдении этого принципа критическая секция не требуется. Применяются два стандартных паттерна.
-
-**Счётчик событий вместо флага.** Флаг, устанавливаемый в ISR и сбрасываемый в `_Run`, теряет событие, если оно повторяется между чтением и сбросом (lost update). Счётчик от этого защищён: ISR инкрементирует его, а `_Run` сравнивает со своей копией.
-
-```c
-struct Button{
-	Button_Descriptor_st descriptor;
-	volatile uint32_t    interruptCounter;   // писатель — только ISR
-	uint32_t             processedCounter;   // писатель — только _Run
-};
-
-void Button_OnInterruptFromISR(Button_st* _button){
-	_button->interruptCounter++;
-}
-
-void Button_Run(Button_st* _button){
-	if(_button->interruptCounter != _button->processedCounter){
-		_button->processedCounter = _button->interruptCounter;
-
-		if(_button->descriptor.pressedCallback != NULL){
-			_button->descriptor.pressedCallback(_button);
-		}
-	}
-}
-```
-
-```c
-// main.c
-//-----Callbacks-----
-void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin){
-	if(GPIO_Pin == BUTTON_Pin){
-		Button_OnInterruptFromISR(&button);
-	}
-}
-//-----Callbacks-----
-```
-
-**Кольцевой буфер для потоковых данных** (UART, АЦП). Индекс `head` модифицирует только ISR, индекс `tail` — только `_Run`. Буфер является lock-free для схемы «один производитель — один потребитель» (SPSC).
+**Принцип единственного писателя (single writer).** Каждая разделяемая переменная модифицируется только одним контекстом — ISR либо `_Run`. При соблюдении этого принципа критическая секция не требуется.
 
 ### Требования к разделяемым полям
 
