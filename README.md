@@ -161,14 +161,16 @@ static uint32_t getTick(void);
 1. Include guard — `MODULEBUTTON_H_`.
 2. `#include` — все зависимости модуля.
 3. `#define` — макроконстанты.
-4. Предварительные объявления перечислений: `typedef enum ModuleButton_Event ModuleButton_Event_et;`
-5. Предварительные объявления структур: `typedef struct ModuleButton ModuleButton_st;`
-6. Типы указателей на функции.
-7. Определения `enum`.
+4. Определения `enum`.
+5. Псевдонимы перечислений: `typedef enum ModuleButton_Event ModuleButton_Event_et;`
+6. Предварительные объявления структур: `typedef struct ModuleButton ModuleButton_st;`
+7. Типы указателей на функции.
 8. Определения `struct`.
 9. Прототипы функций в блоке `extern "C"` — для совместимости с C++ (подавление name mangling).
 
-Предварительные объявления делают все типы модуля видимыми до их определения: например, тип колбэка `ModuleButton_EventCallback` принимает `ModuleButton_st*` (неполный тип) до определения структуры `ModuleButton`.
+Предварительные объявления структур делают все типы модуля видимыми до их определения: например, тип колбэка `ModuleButton_EventCallback` принимает `ModuleButton_st*` (неполный тип) до определения структуры `ModuleButton`.
+
+Перечисления, в отличие от структур, определяются **до** своего `typedef`. Предварительное объявление `enum` без определения запрещено и стандартом C (ISO C forbids forward references to 'enum' types), и C++ (без явного базового типа). Такой заголовок не компилируется в C++, например в unit-тестах на GoogleTest, несмотря на блок `extern "C"`. Перечисления не зависят от остальных типов модуля, поэтому ранее определение ничего не ограничивает.
 
 <details>
 <summary>Пример заголовочного файла: <code>Modules/ModuleButton/ModuleButton.h</code></summary>
@@ -183,17 +185,17 @@ static uint32_t getTick(void);
 
 #define MODULE_BUTTON_HOLD_COUNT 4
 
+enum ModuleButton_Event{
+	MODULE_BUTTON_EVENT_CLICK,
+	MODULE_BUTTON_EVENT_HOLD
+};
+
 typedef enum ModuleButton_Event ModuleButton_Event_et;
 
 typedef struct ModuleButton_Descriptor ModuleButton_Descriptor_st;
 typedef struct ModuleButton            ModuleButton_st;
 
 typedef void (*ModuleButton_EventCallback)(ModuleButton_st* _moduleButton, ModuleButton_Event_et _event);
-
-enum ModuleButton_Event{
-	MODULE_BUTTON_EVENT_CLICK,
-	MODULE_BUTTON_EVENT_HOLD
-};
 
 struct ModuleButton_Descriptor{
 	Button_st*                 button;

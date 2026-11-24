@@ -7,17 +7,17 @@
 
 #define MODULE_BUTTON_HOLD_COUNT 4
 
+enum ModuleButton_Event{
+	MODULE_BUTTON_EVENT_CLICK,
+	MODULE_BUTTON_EVENT_HOLD
+};
+
 typedef enum ModuleButton_Event ModuleButton_Event_et;
 
 typedef struct ModuleButton_Descriptor ModuleButton_Descriptor_st;
 typedef struct ModuleButton            ModuleButton_st;
 
 typedef void (*ModuleButton_EventCallback)(ModuleButton_st* _moduleButton, ModuleButton_Event_et _event);
-
-enum ModuleButton_Event{
-	MODULE_BUTTON_EVENT_CLICK,
-	MODULE_BUTTON_EVENT_HOLD
-};
 
 struct ModuleButton_Descriptor{
 	Button_st*                 button;
