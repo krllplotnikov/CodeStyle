@@ -239,20 +239,20 @@ void ModuleButton_Run(ModuleButton_st* _moduleButton);
 ```c
 #include "ModuleButton.h"
 
-static void buttonEvent(Button_st* _button, ButtonEvent_et _event, uint8_t _counter);
+static void buttonEvent(Button_st* _button, Button_Event_et _event, uint8_t _counter);
 static void sendEvent(ModuleButton_st* _moduleButton, ModuleButton_Event_et _event);
 
 void ModuleButton_Init(ModuleButton_st* _moduleButton, ModuleButton_Descriptor_st* _descriptor){
 	_moduleButton->descriptor = *_descriptor;
 
-	Button_SetEventCallback(_moduleButton->descriptor.button, buttonEvent);
+	Button_SetEventCallback(_moduleButton->descriptor.button, buttonEvent, _moduleButton);
 }
 
 void ModuleButton_Run(ModuleButton_st* _moduleButton){
 	Button_Run(_moduleButton->descriptor.button);
 }
 
-static void buttonEvent(Button_st* _button, ButtonEvent_et _event, uint8_t _counter){
+static void buttonEvent(Button_st* _button, Button_Event_et _event, uint8_t _counter){
 	ModuleButton_st* moduleButton = (ModuleButton_st*)_button->descriptor.context;
 
 	switch(_event){
@@ -301,28 +301,38 @@ static void sendEvent(ModuleButton_st* _moduleButton, ModuleButton_Event_et _eve
 
 32-битный счётчик миллисекунд `getTick()` переполняется через 2³² мс ≈ **49,7 суток** и возобновляет отсчёт с нуля. При некорректном сравнении времени после переполнения таймеры срабатывают немедленно либо не срабатывают никогда. Дефект проявляется только при длительной непрерывной работе и не воспроизводится при стендовой отладке.
 
-**Некорректно — вычислять момент окончания** (фрагмент `Button.c`):
+**Корректно — фиксировать момент начала и сравнивать прошедший интервал** (фрагмент `Button.c`):
 
 ```c
-button->descriptor.getTick() > button->debounceDescriptor.changeTime + BUTTON_DEBOUNCE_TIME_MS
-```
+void Button_Run(Button_st* _button){
+	uint32_t currentTime = _button->descriptor.getTick();
 
-Сумма `changeTime + BUTTON_DEBOUNCE_TIME_MS` вблизи переполнения переходит через ноль, после чего условие становится истинным немедленно.
+	debounce(_button, currentTime);
+	update(_button, currentTime);
+	processEvent(_button, currentTime);
+}
 
-**Корректно — фиксировать момент начала и сравнивать прошедший интервал:**
-
-```c
-uint32_t currentTime = button->descriptor.getTick();
-
-if((currentTime - button->debounceDescriptor.changeTime) >= BUTTON_DEBOUNCE_TIME_MS){
+static void debounce(Button_st* _button, uint32_t _currentTime){
+	...
+	else if((_currentTime - debounceDescriptor->changeTime) >= BUTTON_DEBOUNCE_TIME_MS
 	...
 }
 ```
 
 Беззнаковая арифметика в C выполняется по модулю 2ᴺ, поэтому разность корректна и при переходе через ноль: `0x00000010 - 0xFFFFFFF0 = 0x20`, то есть фактически прошедшие 32 мс.
 
+**Некорректно — вычислять момент окончания:**
+
+```c
+if(getTick() > changeTime + BUTTON_DEBOUNCE_TIME_MS){   // сумма может переполниться
+	...
+}
+```
+
+Сумма `changeTime + BUTTON_DEBOUNCE_TIME_MS` вблизи переполнения переходит через ноль, после чего условие становится истинным немедленно.
+
 Требования:
-- в объекте хранится **момент начала** интервала (`changeTime`), а не момент окончания;
+- в объекте хранится **момент начала** интервала (`changeTime` в `Button`, `startTime` в `LED`), а не момент окончания;
 - сравнение выполняется строго в форме `(currentTime - startTime) >= duration`;
 - текущее время, момент начала и длительность имеют **один беззнаковый тип**, по умолчанию `uint32_t`. Для более узкого тика (например, `uint16_t`) разность явно приводится к этому типу: `(uint16_t)(currentTime - startTime)`. В противном случае integer promotion расширит операнды до `int`, и разность станет отрицательной;
 - значение `getTick()` считывается **однократно** в начале `_Run` и используется до конца прохода — это обеспечивает согласованный временной срез для всех проверок;
@@ -398,7 +408,7 @@ static void moduleButtonEvent(ModuleButton_st* _moduleButton, ModuleButton_Event
 
 Подписка выполняется тем объектом, который получает источник события:
 - если источник — вложенный объект (модуль внутри приложения), подписчик заполняет `eventCallback` и `context` в дескрипторе при вызове его `_Init` (`Device_Init` выше);
-- если источник создан другим слоем (объект библиотеки, созданный в `Board_Init` с `eventCallback = NULL`), подписчик назначает колбэк через функцию `_SetEventCallback` в своём `_Init`: `Button_SetEventCallback(_moduleButton->descriptor.button, buttonEvent);`.
+- если источник создан другим слоем (объект библиотеки, созданный в `Board_Init` с `eventCallback = NULL`), подписчик назначает колбэк и `context` через функцию `_SetEventCallback` в своём `_Init`: `Button_SetEventCallback(_moduleButton->descriptor.button, buttonEvent, _moduleButton);`. Для `LED` аналогично — `LED_SetIndicationIsOverCallback`.
 
 Требования:
 - обработчик события — `static` функция в `.c`-файле подписчика, сигнатура которой точно соответствует типу колбэка;
@@ -478,14 +488,14 @@ void Board_Init(Board_st* _board);
 
 static Board_st* boardInstance = NULL;
 
-static uint32_t       getTick(void);
-static ButtonState_et getButtonState(Button_st* _button);
-static void           setLedState(LED_st* _led, LED_State_et _state);
+static uint32_t        getTick(void);
+static Button_State_et getButtonState(Button_st* _button);
+static void            setLedState(LED_st* _led, LED_State_et _state);
 
 void Board_Init(Board_st* _board){
 	boardInstance = _board;
 
-	ButtonDescriptor_st buttonDescriptor = {
+	Button_Descriptor_st buttonDescriptor = {
 		.getState      = getButtonState,
 		.getTick       = getTick,
 		.eventCallback = NULL,
@@ -506,7 +516,7 @@ static uint32_t getTick(void){
 	return HAL_GetTick();
 }
 
-static ButtonState_et getButtonState(Button_st* _button){
+static Button_State_et getButtonState(Button_st* _button){
 	if(_button == &boardInstance->buttonMain){
 		if(HAL_GPIO_ReadPin(BUTTON_MAIN_GPIO_Port, BUTTON_MAIN_Pin) == GPIO_PIN_SET){
 			return BUTTON_STATE_PRESSED;
@@ -667,9 +677,9 @@ Device_Descriptor_st deviceDescriptor = {
 - Однородные строки (`#define`, объявления типов, поля структур, поля дескрипторов в инициализаторах) выравниваются по колонкам:
 
   ```c
-  static uint32_t       getTick(void);
-  static ButtonState_et getButtonState(Button_st* _button);
-  static void           setLedState(LED_st* _led, LED_State_et _state);
+  static uint32_t        getTick(void);
+  static Button_State_et getButtonState(Button_st* _button);
+  static void            setLedState(LED_st* _led, LED_State_et _state);
   ```
 
 - Присваивание нового состояния конечного автомата (`state = ...;`) — последний оператор блока, отделённый пустой строкой.

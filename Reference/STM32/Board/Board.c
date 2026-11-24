@@ -3,14 +3,14 @@
 
 static Board_st* boardInstance = NULL;
 
-static uint32_t       getTick(void);
-static ButtonState_et getButtonState(Button_st* _button);
-static void           setLedState(LED_st* _led, LED_State_et _state);
+static uint32_t        getTick(void);
+static Button_State_et getButtonState(Button_st* _button);
+static void            setLedState(LED_st* _led, LED_State_et _state);
 
 void Board_Init(Board_st* _board){
 	boardInstance = _board;
 
-	ButtonDescriptor_st buttonDescriptor = {
+	Button_Descriptor_st buttonDescriptor = {
 		.getState      = getButtonState,
 		.getTick       = getTick,
 		.eventCallback = NULL,
@@ -31,7 +31,7 @@ static uint32_t getTick(void){
 	return HAL_GetTick();
 }
 
-static ButtonState_et getButtonState(Button_st* _button){
+static Button_State_et getButtonState(Button_st* _button){
 	if(_button == &boardInstance->buttonMain){
 		if(HAL_GPIO_ReadPin(BUTTON_MAIN_GPIO_Port, BUTTON_MAIN_Pin) == GPIO_PIN_SET){
 			return BUTTON_STATE_PRESSED;
